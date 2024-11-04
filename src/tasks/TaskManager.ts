@@ -1,21 +1,24 @@
 import * as pw from 'playwright';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import OllamaClient from '../ollama';
+import GradioService from '../services/GradioService';
 import systemPrompts from '../prompts/systemPrompts';
 import PageProcessor from './PageProcessor';
 import Task from './Task';
 
 class TaskManager {
-    ollamaClient: OllamaClient;
-    pageProcessor: PageProcessor;
-    currentTask: Task | null;
-    browser: pw.Browser | null;
-    page: pw.Page | null;
-    visionModel: string;
-    languageModel: string;
+    private ollamaClient: OllamaClient;
+    private gradioService: GradioService;
+    private pageProcessor: PageProcessor;
+    private currentTask: Task | null;
+    private browser: pw.Browser | null;
+    private page: pw.Page | null;
+    private visionModel: string;
+    private languageModel: string;
 
     constructor() {
         this.ollamaClient = new OllamaClient();
+        this.gradioService = new GradioService();
         this.pageProcessor = new PageProcessor();
         this.currentTask = null;
         this.browser = null;
@@ -29,6 +32,7 @@ class TaskManager {
     async initialize() {
         this.browser = await pw.chromium.launch();
         this.page = await this.browser.newPage();
+        await this.gradioService.initialize();
 
         // Blocks ads and tracking
         PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
@@ -36,7 +40,7 @@ class TaskManager {
         });
     }
 
-    async executeTask(task) {
+    async executeTask(task: Task) {
         try {
             this.currentTask = task;
             task.updateStatus('in_progress');
@@ -67,40 +71,28 @@ class TaskManager {
     }
 
     async handleNavigationTask(task: Task) {
-        if (!this.page) {
-            throw new Error('Page is not initialized');
-        }
+        await this.page?.goto(task.url as string);
+        await this.page?.waitForLoadState('networkidle');
 
-        await this.page.goto(task.url as string);
+        // Take screenshot
+        const screenshotBuffer = await this.page?.screenshot();
 
-        // Wait for the page to be fully loaded
-        await this.page.waitForLoadState('networkidle');
+        // Process with Gradio
+        const visionAnalysis = await this.gradioService.processScreenshot(screenshotBuffer as Buffer);
 
-        // Take screenshot and convert to base64
-        const screenshotBuffer = await this.page.screenshot();
-        const screenshot = screenshotBuffer.toString('base64');
-
-        const pageContent = await this.page.content();
-
-        // Vision model analysis for page content
-        const visionAnalysis = await this.ollamaClient.generateCompletion(
-            this.visionModel,
-            systemPrompts.VISION_ANALYSIS.content,
-            { imageBase64: screenshot }
-        );
-
-        // Language model planning for navigation
+        // Use the parsed elements with the language model
         const navigationPlan = await this.ollamaClient.generateCompletion(
             this.languageModel,
             `${systemPrompts.NAVIGATION.content}
-            \n\nPage Analysis: ${visionAnalysis.response}
+            \n\nPage Elements: ${visionAnalysis.parsedElements}
             \n\nNavigation Objective: ${task.initialPrompt}`
         );
 
         task.setResult({
-            visionAnalysis: visionAnalysis.response,
+            visionAnalysis: visionAnalysis.parsedElements,
+            annotatedImage: visionAnalysis.annotatedImage,
             navigationPlan: navigationPlan.response,
-            pageContent
+            pageContent: await this.page?.content() || ''
         });
     }
 

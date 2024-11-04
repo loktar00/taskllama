@@ -32,7 +32,7 @@ class PageProcessor {
         return response.match(/selector: ["']([^"']+)["']/)?.[1] || null;
     }
 
-    async extractPageContent(page) {
+    async extractPageContent(page: { innerText: (arg0: string) => any; content: () => any; title: () => any; }) {
         return {
             text: await page.innerText('body'),
             html: await page.content(),

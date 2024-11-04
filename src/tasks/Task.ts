@@ -49,7 +49,7 @@ class Task {
         this.discoveredUrls.push({ url, description });
     }
 
-    getInitialUrl() {
+    getInitialUrl(): string | null {
         if (this.url) return this.url;
         if (this.parentTask) return this.parentTask.getInitialUrl();
         return null;
